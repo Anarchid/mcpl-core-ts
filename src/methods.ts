@@ -323,6 +323,7 @@ export interface IncomingMessageResult {
 // ── Method Name Constants ──
 
 export const method = {
+  INITIALIZE: 'initialize',
   FEATURE_SETS_UPDATE: 'featureSets/update',
   FEATURE_SETS_CHANGED: 'featureSets/changed',
   SCOPE_ELEVATE: 'scope/elevate',

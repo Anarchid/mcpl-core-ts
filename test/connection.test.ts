@@ -312,6 +312,126 @@ describe('McplConnection', () => {
     server.close();
   });
 
+  it('close rejects pending requests', async () => {
+    const [client, server] = await connectedPair();
+
+    // Send a request that won't be answered
+    const promise = client.sendRequest('test/slow', {});
+
+    // Close the connection before responding
+    client.close();
+
+    await assert.rejects(promise, (err: Error) => {
+      assert.equal(err.name, 'ConnectionClosedError');
+      return true;
+    });
+
+    server.close();
+  });
+
+  it('close rejects nextMessage waiters', async () => {
+    const [client, server] = await connectedPair();
+
+    // Start waiting for a message that won't come
+    const promise = server.nextMessage();
+
+    // Close the connection
+    server.close();
+
+    await assert.rejects(promise, (err: Error) => {
+      assert.equal(err.name, 'ConnectionClosedError');
+      return true;
+    });
+
+    client.close();
+  });
+
+  it('request timeout', async () => {
+    const [client, server] = await connectedPair();
+
+    // Send a request with a very short timeout
+    const promise = client.sendRequest('test/slow', {}, 50);
+
+    // Don't respond — let it timeout
+    await assert.rejects(promise, (err: Error) => {
+      assert.equal(err.name, 'RpcError');
+      assert.ok(err.message.includes('timed out'));
+      return true;
+    });
+
+    client.close();
+    server.close();
+  });
+
+  it('fromStreams factory', async () => {
+    const { PassThrough } = await import('node:stream');
+
+    const aToB = new PassThrough();
+    const bToA = new PassThrough();
+
+    const connA = McplConnection.fromStreams(bToA, aToB);
+    const connB = McplConnection.fromStreams(aToB, bToA);
+
+    connA.sendNotification('test/hello', { from: 'A' });
+
+    const msg = await connB.nextMessage();
+    assert.equal(msg.type, 'notification');
+    if (msg.type === 'notification') {
+      assert.equal(msg.notification.method, 'test/hello');
+      assert.deepEqual(msg.notification.params, { from: 'A' });
+    }
+
+    connA.close();
+    connB.close();
+  });
+
+  it('emits error on malformed JSON', async () => {
+    const { PassThrough } = await import('node:stream');
+
+    const aToB = new PassThrough();
+    const bToA = new PassThrough();
+
+    const conn = McplConnection.fromStreams(aToB, bToA);
+
+    const errors: Error[] = [];
+    conn.on('error', (err) => errors.push(err));
+
+    // Write malformed JSON directly to the stream
+    aToB.write('this is not json\n');
+
+    // Give the event loop a tick
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes('Malformed JSON-RPC'));
+
+    conn.close();
+  });
+
+  it('ignores messages without jsonrpc 2.0', async () => {
+    const { PassThrough } = await import('node:stream');
+
+    const aToB = new PassThrough();
+    const bToA = new PassThrough();
+
+    const conn = McplConnection.fromStreams(aToB, bToA);
+
+    // Write a valid JSON object but without jsonrpc field
+    aToB.write(JSON.stringify({ id: 1, method: 'test', params: {} }) + '\n');
+
+    // Write a valid JSON-RPC 2.0 notification
+    aToB.write(JSON.stringify({ jsonrpc: '2.0', method: 'test/real', params: {} }) + '\n');
+
+    // Only the valid JSON-RPC 2.0 message should come through
+    const msg = await conn.nextMessage();
+    assert.equal(msg.type, 'notification');
+    if (msg.type === 'notification') {
+      assert.equal(msg.notification.method, 'test/real');
+    }
+
+    conn.close();
+  });
+
   it('event emitter API', async () => {
     const [client, server] = await connectedPair();
 

@@ -66,19 +66,29 @@ export interface TextContent {
   text: string;
 }
 
-export interface ImageContent {
+export type ImageContent = {
   type: 'image';
-  data?: string;
-  uri?: string;
+  data: string;
   mimeType?: string;
-}
+  uri?: never;
+} | {
+  type: 'image';
+  uri: string;
+  mimeType?: string;
+  data?: never;
+};
 
-export interface AudioContent {
+export type AudioContent = {
   type: 'audio';
-  data?: string;
-  uri?: string;
+  data: string;
   mimeType?: string;
-}
+  uri?: never;
+} | {
+  type: 'audio';
+  uri: string;
+  mimeType?: string;
+  data?: never;
+};
 
 export interface ResourceContent {
   type: 'resource';

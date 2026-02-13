@@ -14,6 +14,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import type { EventEmitter as EventEmitterType } from 'node:events';
 import * as net from 'node:net';
 import * as readline from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
@@ -40,16 +41,25 @@ export interface McplConnectionEvents {
   error: [error: Error];
 }
 
+// Typed EventEmitter — provides compile-time event name/argument checking
+type TypedEmitter = {
+  on<K extends keyof McplConnectionEvents>(event: K, listener: (...args: McplConnectionEvents[K]) => void): TypedEmitter;
+  emit<K extends keyof McplConnectionEvents>(event: K, ...args: McplConnectionEvents[K]): boolean;
+  once<K extends keyof McplConnectionEvents>(event: K, listener: (...args: McplConnectionEvents[K]) => void): TypedEmitter;
+  removeListener<K extends keyof McplConnectionEvents>(event: K, listener: (...args: McplConnectionEvents[K]) => void): TypedEmitter;
+} & EventEmitterType;
+
 // ── Pending Request Tracking ──
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 // ── Connection ──
 
-export class McplConnection extends EventEmitter {
+export class McplConnection extends (EventEmitter as new () => TypedEmitter) {
   private writer: Writable;
   private rl: readline.Interface;
   private nextId = 1;
@@ -73,8 +83,8 @@ export class McplConnection extends EventEmitter {
       try {
         const msg: Record<string, unknown> = JSON.parse(trimmed);
         this.handleParsedMessage(msg);
-      } catch {
-        // Ignore unparseable lines
+      } catch (e) {
+        this.emit('error', new Error(`Malformed JSON-RPC message: ${(e as Error).message}`));
       }
     });
 
@@ -146,11 +156,6 @@ export class McplConnection extends EventEmitter {
         this.pending.delete(String(id));
       };
 
-      this.pending.set(String(id), {
-        resolve: (value) => { cleanup(); resolve(value); },
-        reject: (err) => { cleanup(); reject(err); },
-      });
-
       if (timeoutMs > 0) {
         timer = setTimeout(() => {
           const pending = this.pending.get(String(id));
@@ -160,6 +165,12 @@ export class McplConnection extends EventEmitter {
           }
         }, timeoutMs);
       }
+
+      this.pending.set(String(id), {
+        resolve: (value) => { cleanup(); resolve(value); },
+        reject: (err) => { cleanup(); reject(err); },
+        timer,
+      });
 
       this.writeLine(JSON.stringify(request));
     });
@@ -217,16 +228,12 @@ export class McplConnection extends EventEmitter {
   // ── Internal ──
 
   private writeLine(json: string): void {
-    const ok = this.writer.write(json + '\n');
-    if (!ok) {
-      // Backpressure: wait for drain before writing more.
-      // We don't await here (callers are sync), but we queue a pause
-      // so subsequent writes won't pile up unboundedly.
-      this.writer.once('drain', () => { /* resumed */ });
-    }
+    this.writer.write(json + '\n');
   }
 
   private handleParsedMessage(msg: Record<string, unknown>): void {
+    if (msg.jsonrpc !== '2.0') return; // Not a valid JSON-RPC 2.0 message
+
     const hasId = msg.id != null;
     const hasMethod = typeof msg.method === 'string';
     const hasResult = 'result' in msg;
@@ -284,9 +291,10 @@ export class McplConnection extends EventEmitter {
     if (this.closed) return;
     this.closed = true;
 
-    // Reject all pending requests
+    // Reject all pending requests and clear their timers
     const closedErr = new ConnectionClosedError();
     for (const [, pending] of this.pending) {
+      if (pending.timer) clearTimeout(pending.timer);
       pending.reject(closedErr);
     }
     this.pending.clear();

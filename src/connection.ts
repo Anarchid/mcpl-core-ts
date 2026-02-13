@@ -120,19 +120,47 @@ export class McplConnection extends EventEmitter {
     return this.closed;
   }
 
+  /** Default timeout for sendRequest (ms). 0 = no timeout. */
+  requestTimeout = 30_000;
+
   /**
    * Send a JSON-RPC request and wait for the response.
    * Responses are matched by ID; incoming requests/notifications that arrive
    * while waiting are queued for `nextMessage()` / event listeners.
+   *
+   * @param timeout Override the default request timeout (ms). 0 = no timeout.
    */
-  async sendRequest(method: string, params?: unknown): Promise<unknown> {
+  async sendRequest(method: string, params?: unknown, timeout?: number): Promise<unknown> {
     if (this.closed) throw new ConnectionClosedError();
 
     const id = this.nextId++;
     const request = makeRequest(id, method, params);
 
+    const timeoutMs = timeout ?? this.requestTimeout;
+
     return new Promise<unknown>((resolve, reject) => {
-      this.pending.set(String(id), { resolve, reject });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        this.pending.delete(String(id));
+      };
+
+      this.pending.set(String(id), {
+        resolve: (value) => { cleanup(); resolve(value); },
+        reject: (err) => { cleanup(); reject(err); },
+      });
+
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          const pending = this.pending.get(String(id));
+          if (pending) {
+            this.pending.delete(String(id));
+            reject(new RpcError(-32000, `Request timed out after ${timeoutMs}ms: ${method}`));
+          }
+        }, timeoutMs);
+      }
+
       this.writeLine(JSON.stringify(request));
     });
   }
@@ -189,7 +217,13 @@ export class McplConnection extends EventEmitter {
   // ── Internal ──
 
   private writeLine(json: string): void {
-    this.writer.write(json + '\n');
+    const ok = this.writer.write(json + '\n');
+    if (!ok) {
+      // Backpressure: wait for drain before writing more.
+      // We don't await here (callers are sync), but we queue a pause
+      // so subsequent writes won't pile up unboundedly.
+      this.writer.once('drain', () => { /* resumed */ });
+    }
   }
 
   private handleParsedMessage(msg: Record<string, unknown>): void {

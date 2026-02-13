@@ -68,6 +68,33 @@ export interface StateRollbackResult {
   reason?: string;
 }
 
+/** State checkpoint metadata (Section 8.2) */
+export interface StateCheckpoint {
+  id: string;
+  featureSet: string;
+  timestamp: string;
+  parent?: string;
+  label?: string;
+}
+
+/**
+ * JSON Patch operation (RFC 6902) for host-managed state (Section 8.3).
+ * When a feature set declares `hostState: true`, the server sends patches
+ * in tool results, and the host applies them to reconstruct state.
+ */
+export interface JsonPatchOperation {
+  op: 'add' | 'remove' | 'replace' | 'move' | 'copy' | 'test';
+  path: string;
+  value?: unknown;
+  from?: string;
+}
+
+/** State included in tool results when hostState is enabled */
+export interface HostManagedState {
+  checkpoint: string;
+  patch?: JsonPatchOperation[];
+}
+
 // ── Push Events (Section 9) ──
 
 /** push/event (Server → Host, Request) */

@@ -12,12 +12,17 @@ export interface McplCapabilities {
   version: string;
   pushEvents?: boolean;
   contextHooks?: ContextHooksCap;
-  inferenceRequest?: boolean;
+  inferenceRequest?: boolean | InferenceRequestCap;
   streamObserver?: boolean;
   rollback?: boolean;
   channels?: boolean;
+  modelInfo?: boolean;
   featureSets?: FeatureSetDeclaration[];
   scopedAccess?: boolean;
+}
+
+export interface InferenceRequestCap {
+  streaming: boolean;
 }
 
 export interface ContextHooksCap {
@@ -75,7 +80,15 @@ export function hasRollback(caps: McplCapabilities): boolean {
 }
 
 export function hasInferenceRequest(caps: McplCapabilities): boolean {
-  return caps.inferenceRequest === true;
+  return caps.inferenceRequest === true || (typeof caps.inferenceRequest === 'object' && caps.inferenceRequest !== null);
+}
+
+export function hasInferenceStreaming(caps: McplCapabilities): boolean {
+  return typeof caps.inferenceRequest === 'object' && caps.inferenceRequest !== null && caps.inferenceRequest.streaming === true;
+}
+
+export function hasModelInfo(caps: McplCapabilities): boolean {
+  return caps.modelInfo === true;
 }
 
 export function hasStreamObserver(caps: McplCapabilities): boolean {
